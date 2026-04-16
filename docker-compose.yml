@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+
+  backend:
+    build: ./backend
+    container_name: valtior-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app          # Live reload: code changes take effect immediately
+      - valtior-db:/app/data    # Persistent database storage
+    environment:
+      - DATABASE_URL=sqlite:////app/data/valtior.db
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}   # Set in .env file
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: valtior-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app         # Live reload: UI changes take effect immediately
+      - /app/node_modules       # Keep node_modules inside the container
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  valtior-db:                   # Persists your database between restarts

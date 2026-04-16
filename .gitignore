@@ -1,0 +1,36 @@
+# Environment / secrets
+.env
+.env.local
+*.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Database (mounted volume / local SQLite)
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
