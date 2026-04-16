@@ -9,6 +9,7 @@ from typing import List
 from database import get_db
 import models as db_models
 import schemas
+from services import audit
 
 router = APIRouter(prefix="/api/v1/projects", tags=["Projects"])
 
@@ -73,6 +74,15 @@ def create_project(payload: schemas.ProjectCreate, db: Session = Depends(get_db)
     db.add(project)
     db.commit()
     db.refresh(project)
+    audit.log(
+        db,
+        action="project_created",
+        entity_type="project",
+        entity_id=project.id,
+        project_id=project.id,
+        summary=f"Created project: {project.name}",
+        details={"institution": project.institution, "lifecycle_stage": project.lifecycle_stage},
+    )
     r = schemas.ProjectResponse.model_validate(project)
     r.model_count = 0
     return r
@@ -93,10 +103,23 @@ def update_project(project_id: str, payload: schemas.ProjectUpdate, db: Session 
     project = db.query(db_models.Project).filter(db_models.Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    for field, value in payload.model_dump(exclude_none=True).items():
+    incoming = payload.model_dump(exclude_none=True)
+    changes = {k: {"from": getattr(project, k, None), "to": v} for k, v in incoming.items() if getattr(project, k, None) != v}
+    for field, value in incoming.items():
         setattr(project, field, value)
     db.commit()
     db.refresh(project)
+    if changes:
+        change_str = ", ".join(f"{k}: {v['from']!r}→{v['to']!r}" for k, v in changes.items())
+        audit.log(
+            db,
+            action="project_updated",
+            entity_type="project",
+            entity_id=project.id,
+            project_id=project.id,
+            summary=change_str[:480],
+            details={"changes": changes},
+        )
     return _enrich_project(project)
 
 

@@ -22,6 +22,7 @@ from services.impact_engine import (
     run_impact_analysis,
     generate_portfolio_template,
 )
+from services import audit
 
 router = APIRouter(tags=["Impact Analysis"])
 
@@ -144,6 +145,23 @@ async def analyse_portfolio_impact(
 
     result["portfolio_filename"] = filename
     result["columns_detected"]   = columns
+
+    audit.log(
+        db,
+        action="impact_run",
+        entity_type="model",
+        entity_id=to_model_id,
+        project_id=project_id,
+        summary=f"Portfolio impact: v{old_model.version} → v{new_model.version} — {result['changed_customers']}/{result['total_customers']} changed band; recommendation: {result['recommendation']}",
+        details={
+            "from_version": old_model.version, "to_version": new_model.version,
+            "total_customers": result["total_customers"],
+            "changed_customers": result["changed_customers"],
+            "edd_required": result["edd_required"],
+            "recommendation": result["recommendation"],
+        },
+    )
+
     return result
 
 
@@ -208,4 +226,21 @@ async def simulate_whatif(
     result["portfolio_filename"] = filename
     result["columns_detected"]   = columns
     result["simulation_mode"]    = "whatif"
+
+    audit.log(
+        db,
+        action="whatif_simulated",
+        entity_type="model",
+        entity_id=model_id,
+        project_id=project_id,
+        summary=f"What-if on v{model.version}: {result['changed_customers']}/{result['total_customers']} changed band; recommendation: {result['recommendation']}",
+        details={
+            "model_version": model.version,
+            "total_customers": result["total_customers"],
+            "changed_customers": result["changed_customers"],
+            "edd_required": result["edd_required"],
+            "recommendation": result["recommendation"],
+        },
+    )
+
     return result

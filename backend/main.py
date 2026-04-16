@@ -15,6 +15,7 @@ from routers.scenarios import router as scenarios_router
 from routers.remediation import router as remediation_router
 from routers.impact import router as impact_router
 from routers.versions import router as versions_router
+from routers.audit_log import router as audit_router
 
 # Create all database tables on startup (new tables only; won't touch existing ones)
 Base.metadata.create_all(bind=engine)
@@ -97,6 +98,7 @@ app.include_router(scenarios_router, prefix="/api/v1")
 app.include_router(remediation_router)
 app.include_router(impact_router, prefix="/api/v1")
 app.include_router(versions_router)  # v0.4 — version comparison / diff
+app.include_router(audit_router)     # v0.5 — audit trail
 
 
 @app.get("/", tags=["Health"])

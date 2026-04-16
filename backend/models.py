@@ -134,3 +134,23 @@ class Scenario(Base):
     created_at       = Column(DateTime, default=datetime.utcnow)
 
     model_version = relationship("RiskModel", back_populates="scenarios")
+
+
+class AuditLog(Base):
+    """
+    Immutable audit trail of validation actions.
+    Required for FFFS 2017:11 traceability — who did what, when, and what changed.
+    Entries are append-only; no UPDATE/DELETE in normal operation.
+    """
+    __tablename__ = "audit_log"
+
+    id          = Column(String, primary_key=True, default=new_uuid)
+    project_id  = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    actor       = Column(String(200), default="validator")     # User/system identifier
+    action      = Column(String(100), nullable=False, index=True)
+    # finding | model | project | scenario | settings | impact
+    entity_type = Column(String(50), nullable=False)
+    entity_id   = Column(String, nullable=True)
+    summary     = Column(String(500), default="")              # Short human-readable description
+    details     = Column(JSON, default=dict)                   # Before/after values, free-form payload
+    created_at  = Column(DateTime, default=datetime.utcnow, index=True)

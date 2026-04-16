@@ -5,6 +5,7 @@ import { getProject, getModels, uploadModel, uploadModelFile, getFindings, annot
 import ScenarioPanel from '../components/ScenarioPanel'
 import ImpactPanel from '../components/ImpactPanel'
 import ConfiguratorPanel from '../components/ConfiguratorPanel'
+import ActivityPanel from '../components/ActivityPanel'
 
 const LIFECYCLE_DISPLAY = {
   initiering:         'Initiation',
@@ -1333,6 +1334,7 @@ export default function ProjectDetail() {
           { key: 'compare',    label: 'Compare Versions' },
           { key: 'impact',     label: 'Portfolio Impact' },
           { key: 'configurator', label: 'Configurator' },
+          { key: 'activity',     label: 'Activity' },
         ].map(({ key, label }) => (
           <button
             key={key}
@@ -1394,6 +1396,10 @@ export default function ProjectDetail() {
               modelVersion={versions.find(v => v.id === selectedModel)?.version}
             />
           : <div className="card p-8 text-center text-gray-400 text-sm">Upload a model first to configure its parameters.</div>
+      )}
+
+      {tab === 'activity' && (
+        <ActivityPanel projectId={id} />
       )}
     </div>
   )

@@ -14,6 +14,7 @@ import models as db_models
 import schemas
 from services.parser import hash_text, parse_model_with_ai, run_structural_checks, validate_model_with_ai
 from services.extractor import extract_text_from_file, detect_document_type
+from services import audit
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/models", tags=["Models"])
 findings_router = APIRouter(prefix="/api/v1/findings", tags=["Findings"])
@@ -86,6 +87,16 @@ def upload_model(
     # Kick off parsing in the background so the API responds immediately
     background_tasks.add_task(_parse_and_validate, model.id)
 
+    audit.log(
+        db,
+        action="model_uploaded",
+        entity_type="model",
+        entity_id=model.id,
+        project_id=project_id,
+        summary=f"Uploaded model v{version} ({payload.source_type})",
+        details={"source_type": payload.source_type, "version": version, "size_chars": len(payload.raw_text)},
+    )
+
     r = schemas.ModelResponse.model_validate(model)
     r.finding_count = 0
     return r
@@ -152,6 +163,16 @@ async def upload_model_file(
     db.refresh(model)
 
     background_tasks.add_task(_parse_and_validate, model.id)
+
+    audit.log(
+        db,
+        action="model_uploaded",
+        entity_type="model",
+        entity_id=model.id,
+        project_id=project_id,
+        summary=f"Uploaded {file.filename} as v{version} ({source_type})",
+        details={"filename": file.filename, "source_type": source_type, "version": version, "size_bytes": len(content)},
+    )
 
     r = schemas.ModelResponse.model_validate(model)
     r.finding_count = 0
@@ -226,9 +247,20 @@ def save_validation_opinion(
     if not model:
         raise HTTPException(status_code=404, detail="Model version not found")
 
+    prev_len = len(model.validation_opinion or "")
     model.validation_opinion = payload.validation_opinion
     db.commit()
     db.refresh(model)
+
+    audit.log(
+        db,
+        action="opinion_saved",
+        entity_type="model",
+        entity_id=model.id,
+        project_id=project_id,
+        summary=f"Validator's opinion saved for v{model.version} ({len(payload.validation_opinion)} chars)",
+        details={"prev_length": prev_len, "new_length": len(payload.validation_opinion or "")},
+    )
 
     r = schemas.ModelResponse.model_validate(model)
     r.finding_count = len(model.findings)
@@ -260,11 +292,23 @@ def annotate_finding(
     valid_statuses = {"pending", "accepted", "rejected", "follow_up"}
     if payload.annotation_status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Status must be one of: {valid_statuses}")
+    prev_status = finding.annotation_status
     finding.annotation_status = payload.annotation_status
     finding.annotation_note   = payload.annotation_note or ""
     finding.annotated_at      = datetime.utcnow()
     db.commit()
     db.refresh(finding)
+
+    model = db.query(db_models.RiskModel).filter_by(id=finding.model_version_id).first()
+    audit.log(
+        db,
+        action="finding_annotated",
+        entity_type="finding",
+        entity_id=finding.id,
+        project_id=model.project_id if model else None,
+        summary=f"{prev_status} → {payload.annotation_status}: {finding.title[:120]}",
+        details={"from": prev_status, "to": payload.annotation_status, "note": finding.annotation_note},
+    )
     return finding
 
 

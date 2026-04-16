@@ -68,6 +68,16 @@ export const getRemediationSummary  = (projectId, modelId) =>
 export const getOverdueAcrossProjects = () =>
   api.get('/remediation/overdue')
 
+// ── Audit log ─────────────────────────────────────────────────────────────────
+export const getProjectAuditLog = (projectId, { action, entityType, limit } = {}) => {
+  const params = new URLSearchParams()
+  if (action)     params.set('action', action)
+  if (entityType) params.set('entity_type', entityType)
+  if (limit)      params.set('limit', limit)
+  const qs = params.toString()
+  return api.get(`/projects/${projectId}/audit${qs ? `?${qs}` : ''}`)
+}
+
 export const compareVersions        = (projectId, fromId, toId) =>
   api.get(`/projects/${projectId}/versions/compare?from_id=${fromId}&to_id=${toId}`)
 

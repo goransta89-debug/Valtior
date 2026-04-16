@@ -17,6 +17,7 @@ from database import get_db
 import models as db_models
 import schemas
 from services.version_diff import compare_versions
+from services import audit
 
 router = APIRouter(tags=["Remediation"])
 
@@ -37,6 +38,12 @@ def update_remediation(
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found.")
 
+    before = {
+        "status": finding.remediation_status,
+        "owner":  finding.remediation_owner,
+        "due":    finding.remediation_due,
+    }
+
     finding.remediation_status = payload.remediation_status
 
     if payload.remediation_owner is not None:
@@ -54,6 +61,25 @@ def update_remediation(
 
     db.commit()
     db.refresh(finding)
+
+    after = {
+        "status": finding.remediation_status,
+        "owner":  finding.remediation_owner,
+        "due":    finding.remediation_due,
+    }
+    changes = {k: {"from": before[k], "to": after[k]} for k in after if before[k] != after[k]}
+    if changes:
+        model = db.query(db_models.RiskModel).filter_by(id=finding.model_version_id).first()
+        change_str = ", ".join(f"{k}: {v['from']!r}→{v['to']!r}" for k, v in changes.items())
+        audit.log(
+            db,
+            action="remediation_updated",
+            entity_type="finding",
+            entity_id=finding.id,
+            project_id=model.project_id if model else None,
+            summary=f"{finding.title[:80]} — {change_str}",
+            details={"changes": changes},
+        )
     return finding
 
 
