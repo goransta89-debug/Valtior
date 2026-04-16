@@ -9,6 +9,8 @@ Endpoints:
        → Upload a portfolio CSV + specify two model versions → returns full impact analysis
 """
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -142,4 +144,68 @@ async def analyse_portfolio_impact(
 
     result["portfolio_filename"] = filename
     result["columns_detected"]   = columns
+    return result
+
+
+# ── Superadmin "what-if" simulation ───────────────────────────────────────────
+
+@router.post(
+    "/projects/{project_id}/models/{model_id}/whatif",
+    summary="Simulate edited model parameters against a portfolio",
+)
+async def simulate_whatif(
+    project_id: str,
+    model_id: str,
+    edited_structured: str = Form(..., description="JSON of edited structured params (risk_factors, bands, triggers, scoring)"),
+    portfolio: UploadFile = File(..., description="CSV portfolio file"),
+    db: Session = Depends(get_db),
+):
+    """
+    Compares the current parsed model against an in-memory edited version
+    using the existing impact engine. Does NOT persist the edits — purely a simulation.
+
+    Used by the superadmin Configurator view to preview whether a parameter change
+    (weight, band threshold, trigger) is material enough to require a
+    formal remediation project, a targeted sprint, or routine handling.
+    """
+    model = _get_parsed_model(project_id, model_id, db)
+
+    try:
+        edited = json.loads(edited_structured)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid edited_structured JSON: {e}")
+
+    if not isinstance(edited, dict):
+        raise HTTPException(status_code=400, detail="edited_structured must be a JSON object.")
+
+    filename = portfolio.filename or ""
+    if not filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+
+    content = await portfolio.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Portfolio file too large (max 10 MB).")
+
+    try:
+        rows, columns = parse_portfolio_csv(content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="The portfolio file is empty.")
+
+    try:
+        result = run_impact_analysis(
+            portfolio_rows=rows,
+            old_model_structured=model.structured,
+            new_model_structured=edited,
+            old_version=f"{model.version} (current)",
+            new_version=f"{model.version} (edited)",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"What-if simulation failed: {e}")
+
+    result["portfolio_filename"] = filename
+    result["columns_detected"]   = columns
+    result["simulation_mode"]    = "whatif"
     return result

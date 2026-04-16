@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Upload, RefreshCw, CheckCircle, XCircle, Flag, ChevronDown, ChevronUp, GitBranch, FileText, FileSpreadsheet, File, Download, AlertTriangle, Clock, User, Calendar, ArrowRight, TrendingDown, TrendingUp, Minus } from 'lucide-react'
+import { ArrowLeft, Upload, RefreshCw, CheckCircle, XCircle, Flag, ChevronDown, ChevronUp, GitBranch, FileText, FileSpreadsheet, File, Download, AlertTriangle, Clock, User, Calendar, ArrowRight, TrendingDown, TrendingUp, Minus, Search, X, CheckSquare, Square } from 'lucide-react'
 import { getProject, getModels, uploadModel, uploadModelFile, getFindings, annotateFinding, getComplianceMatrix, reportPdfUrl, reportPptxUrl, retryModel, updateRemediation, getRemediationSummary, compareVersions, saveOpinion } from '../api'
 import ScenarioPanel from '../components/ScenarioPanel'
 import ImpactPanel from '../components/ImpactPanel'
+import ConfiguratorPanel from '../components/ConfiguratorPanel'
 
 const LIFECYCLE_DISPLAY = {
   initiering:         'Initiation',
@@ -239,15 +240,25 @@ const RAG_STYLES = {
 }
 
 // ── Single finding card (shared between grouped and flat views) ───────────────
-function FindingCard({ f, expanded, onToggle, onAnnotate, remEdit, onStartEdit, onSaveRemediation, onCancelEdit, onEditChange, saving }) {
+function FindingCard({ f, expanded, onToggle, onAnnotate, remEdit, onStartEdit, onSaveRemediation, onCancelEdit, onEditChange, saving, selected, onSelectToggle }) {
   const isEditing = !!remEdit[f.id]
   const edit = remEdit[f.id] || {}
   return (
-    <div className="card overflow-hidden">
+    <div className={`card overflow-hidden ${selected ? 'ring-2 ring-teal' : ''}`}>
       <div
         className="flex items-start gap-3 px-5 py-4 cursor-pointer hover:bg-gray-50"
         onClick={onToggle}
       >
+        {onSelectToggle && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onSelectToggle() }}
+            className="mt-0.5 text-gray-400 hover:text-teal transition-colors flex-shrink-0"
+            title={selected ? 'Deselect' : 'Select for bulk action'}
+          >
+            {selected ? <CheckSquare size={16} className="text-teal" /> : <Square size={16} />}
+          </button>
+        )}
         <SeverityBadge severity={f.severity} />
         <div className="flex-1 min-w-0">
           <p className="font-medium text-sm text-navy">{f.title}</p>
@@ -374,6 +385,15 @@ function FindingsPanel({ projectId, modelId }) {
   const [remEdit, setRemEdit]       = useState({})
   const [saving, setSaving]         = useState({})
   const [viewMode, setViewMode]     = useState('framework')  // 'framework' | 'severity'
+  // Filters (v0.5)
+  const [search, setSearch]         = useState('')
+  const [sevFilter, setSevFilter]   = useState('all')   // all | Critical | High | Medium | Low
+  const [statusFilter, setStatusFilter] = useState('all') // all | open | in_progress | resolved | accepted_risk
+  // Bulk selection (v0.5)
+  const [selected, setSelected]     = useState({})  // { findingId: true }
+  const [bulkOpen, setBulkOpen]     = useState(false)
+  const [bulkEdit, setBulkEdit]     = useState({ status: '', owner: '', due: '' })
+  const [bulkSaving, setBulkSaving] = useState(false)
 
   const recomputeRemSummary = (list) => {
     const today = new Date().toISOString().slice(0, 10)
@@ -450,11 +470,68 @@ function FindingsPanel({ projectId, modelId }) {
   const toggle = id => setExpanded(e => ({ ...e, [id]: !e[id] }))
   const toggleDim = key => setDimExpanded(e => ({ ...e, [key]: !e[key] }))
 
+  const matchesFilters = (f) => {
+    if (sevFilter !== 'all' && f.severity !== sevFilter) return false
+    if (statusFilter !== 'all' && (f.remediation_status || 'open') !== statusFilter) return false
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      const hay = `${f.title} ${f.description} ${f.category} ${f.recommendation} ${f.remediation_owner || ''}`.toLowerCase()
+      if (!hay.includes(q)) return false
+    }
+    return true
+  }
+
+  const filteredFindings = findings.filter(matchesFilters)
+  const filterActive = sevFilter !== 'all' || statusFilter !== 'all' || search.trim().length > 0
+  const clearFilters = () => { setSearch(''); setSevFilter('all'); setStatusFilter('all') }
+
+  const toggleSelect = (id) => setSelected(s => {
+    const n = { ...s }
+    if (n[id]) delete n[id]; else n[id] = true
+    return n
+  })
+  const selectAllVisible = () => {
+    const next = {}
+    filteredFindings.forEach(f => { next[f.id] = true })
+    setSelected(next)
+  }
+  const clearSelection = () => { setSelected({}); setBulkOpen(false) }
+  const selectedCount = Object.keys(selected).length
+  const allVisibleSelected = filteredFindings.length > 0 && filteredFindings.every(f => selected[f.id])
+
+  const applyBulk = async () => {
+    if (selectedCount === 0) return
+    setBulkSaving(true)
+    try {
+      const ids = Object.keys(selected).filter(id => findings.find(f => f.id === id))
+      const updated = await Promise.all(ids.map(id => {
+        const current = findings.find(f => f.id === id)
+        return updateRemediation(id, {
+          remediation_status: bulkEdit.status || current.remediation_status || 'open',
+          remediation_owner:  bulkEdit.owner !== '' ? bulkEdit.owner : (current.remediation_owner || null),
+          remediation_note:   current.remediation_note || '',
+          remediation_due:    bulkEdit.due !== ''   ? bulkEdit.due   : (current.remediation_due   || null),
+        }).then(r => r.data)
+      }))
+      setFindings(prev => {
+        const map = new Map(updated.map(u => [u.id, u]))
+        const next = prev.map(f => map.has(f.id) ? { ...f, ...map.get(f.id) } : f)
+        setRemSummary(recomputeRemSummary(next))
+        return next
+      })
+      setBulkEdit({ status: '', owner: '', due: '' })
+      clearSelection()
+    } finally {
+      setBulkSaving(false)
+    }
+  }
+
   const cardProps = (f) => ({
     f, expanded: !!expanded[f.id], onToggle: () => toggle(f.id),
     onAnnotate: annotate, remEdit, onStartEdit: startEdit,
     onSaveRemediation: saveRemediation, onCancelEdit: cancelEdit,
     onEditChange: handleEditChange, saving,
+    selected: !!selected[f.id], onSelectToggle: () => toggleSelect(f.id),
   })
 
   if (loading) return <div className="text-sm text-gray-400 py-4">Loading findings…</div>
@@ -465,11 +542,11 @@ function FindingsPanel({ projectId, modelId }) {
   const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 }
   findings.forEach(f => { if (f.severity in counts) counts[f.severity]++ })
 
-  // Group by dimension
+  // Group by dimension (filtered)
   const byDim = {}
   DIMENSIONS.forEach(d => { byDim[d.key] = [] })
   const untagged = []
-  findings.forEach(f => {
+  filteredFindings.forEach(f => {
     if (f.framework_dimension && byDim[f.framework_dimension] !== undefined) {
       byDim[f.framework_dimension].push(f)
     } else {
@@ -513,7 +590,9 @@ function FindingsPanel({ projectId, modelId }) {
             </div>
           ))}
           <span className="text-gray-300">|</span>
-          <span className="text-sm text-gray-500">{findings.length} total</span>
+          <span className="text-sm text-gray-500">
+            {filterActive ? `${filteredFindings.length} of ${findings.length}` : `${findings.length} total`}
+          </span>
         </div>
         <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
           {[['framework','By Framework'],['severity','By Severity']].map(([m, lbl]) => (
@@ -525,8 +604,111 @@ function FindingsPanel({ projectId, modelId }) {
         </div>
       </div>
 
+      {/* Search + filter toolbar */}
+      <div className="card p-3 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-60">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search title, description, owner…"
+            className="input text-sm pl-9 pr-9 w-full"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        <select value={sevFilter} onChange={e => setSevFilter(e.target.value)} className="input text-sm w-36">
+          <option value="all">All severities</option>
+          <option value="Critical">Critical</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input text-sm w-40">
+          <option value="all">All statuses</option>
+          <option value="open">Open</option>
+          <option value="in_progress">In Progress</option>
+          <option value="resolved">Resolved</option>
+          <option value="accepted_risk">Risk Accepted</option>
+        </select>
+        {filterActive && (
+          <button onClick={clearFilters} className="text-xs text-teal hover:underline flex items-center gap-1">
+            <X size={11} /> Clear filters
+          </button>
+        )}
+        <div className="flex-1" />
+        {filteredFindings.length > 0 && (
+          <button
+            onClick={allVisibleSelected ? clearSelection : selectAllVisible}
+            className="text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 font-medium"
+          >
+            {allVisibleSelected ? <CheckSquare size={12} className="text-teal" /> : <Square size={12} />}
+            {allVisibleSelected ? 'Deselect all' : 'Select all visible'}
+          </button>
+        )}
+      </div>
+
+      {/* Bulk action bar */}
+      {selectedCount > 0 && (
+        <div className="card p-4 bg-teal-pale border-teal/30">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm font-semibold text-navy">
+              {selectedCount} finding{selectedCount === 1 ? '' : 's'} selected
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setBulkOpen(o => !o)} className="btn-secondary text-xs">
+                {bulkOpen ? 'Hide bulk edit' : 'Bulk assign…'}
+              </button>
+              <button onClick={clearSelection} className="text-xs text-gray-500 hover:text-gray-700">Clear</button>
+            </div>
+          </div>
+          {bulkOpen && (
+            <div className="bg-white rounded-lg p-4 border border-gray-200 space-y-3">
+              <p className="text-xs text-gray-500">Empty fields are left unchanged. Filled fields apply to every selected finding.</p>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Status</label>
+                  <select value={bulkEdit.status} onChange={e => setBulkEdit(b => ({ ...b, status: e.target.value }))} className="input text-sm">
+                    <option value="">— unchanged —</option>
+                    <option value="open">Open</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="resolved">Resolved</option>
+                    <option value="accepted_risk">Accept Risk</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Owner</label>
+                  <input value={bulkEdit.owner} onChange={e => setBulkEdit(b => ({ ...b, owner: e.target.value }))}
+                    placeholder="— unchanged —" className="input text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Due date</label>
+                  <input type="date" value={bulkEdit.due} onChange={e => setBulkEdit(b => ({ ...b, due: e.target.value }))}
+                    className="input text-sm" />
+                </div>
+              </div>
+              <button onClick={applyBulk} disabled={bulkSaving} className="btn-primary text-xs flex items-center gap-1.5">
+                {bulkSaving ? <><RefreshCw size={11} className="animate-spin" /> Applying…</> : <><CheckCircle size={11} /> Apply to {selectedCount}</>}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Empty state when filters match nothing */}
+      {filteredFindings.length === 0 && (
+        <div className="card p-8 text-center text-gray-400 text-sm">
+          No findings match the current filters.
+          <button onClick={clearFilters} className="ml-2 text-teal hover:underline">Clear filters</button>
+        </div>
+      )}
+
       {/* ── Framework view ── */}
-      {viewMode === 'framework' && (
+      {viewMode === 'framework' && filteredFindings.length > 0 && (
         <div className="space-y-4">
           {/* Framework overview row */}
           <div className="grid grid-cols-4 gap-3">
@@ -611,9 +793,9 @@ function FindingsPanel({ projectId, modelId }) {
       )}
 
       {/* ── Severity view (flat, original style) ── */}
-      {viewMode === 'severity' && (
+      {viewMode === 'severity' && filteredFindings.length > 0 && (
         <div className="space-y-3">
-          {findings
+          {filteredFindings
             .slice()
             .sort((a,b) => (sevOrder[a.severity]||9) - (sevOrder[b.severity]||9))
             .map(f => <FindingCard key={f.id} {...cardProps(f)} />)
@@ -1150,6 +1332,7 @@ export default function ProjectDetail() {
           { key: 'scenarios',  label: 'Scenarios' },
           { key: 'compare',    label: 'Compare Versions' },
           { key: 'impact',     label: 'Portfolio Impact' },
+          { key: 'configurator', label: 'Configurator' },
         ].map(({ key, label }) => (
           <button
             key={key}
@@ -1199,6 +1382,18 @@ export default function ProjectDetail() {
 
       {tab === 'impact' && (
         <ImpactPanel projectId={id} versions={versions} />
+      )}
+
+      {tab === 'configurator' && (
+        selectedModel
+          ? <ConfiguratorPanel
+              projectId={id}
+              modelId={selectedModel}
+              structured={versions.find(v => v.id === selectedModel)?.structured}
+              parseStatus={versions.find(v => v.id === selectedModel)?.parse_status}
+              modelVersion={versions.find(v => v.id === selectedModel)?.version}
+            />
+          : <div className="card p-8 text-center text-gray-400 text-sm">Upload a model first to configure its parameters.</div>
       )}
     </div>
   )

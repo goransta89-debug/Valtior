@@ -49,6 +49,15 @@ export const runImpactAnalysis = (projectId, fromModelId, toModelId, portfolioFi
   })
 }
 
+export const runWhatIfSimulation = (projectId, modelId, editedStructured, portfolioFile) => {
+  const form = new FormData()
+  form.append('edited_structured', JSON.stringify(editedStructured))
+  form.append('portfolio',         portfolioFile)
+  return api.post(`/projects/${projectId}/models/${modelId}/whatif`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
 // ── Remediation ───────────────────────────────────────────────────────────────
 export const updateRemediation      = (findingId, data) =>
   api.patch(`/findings/${findingId}/remediate`, data)
